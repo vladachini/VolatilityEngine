@@ -36,8 +36,8 @@ gating is handled in the engine.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from math import erf, exp, log, sqrt
+from dataclasses import dataclass
+from math import sqrt
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -49,22 +49,10 @@ from engine import (
     HISTORICAL_WIN_RATE,
     MAX_PORTFOLIO_FRACTION,
     VolatilityEngine,
+    bs_call,
 )
 
 TRADING_DAYS = 252.0
-
-
-def _norm_cdf(x: float) -> float:
-    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
-
-
-def bs_call(S: float, K: float, T: float, sigma: float, r: float = 0.0) -> float:
-    """Black-Scholes European call price. Returns intrinsic value at/after expiry."""
-    if T <= 0 or sigma <= 0 or S <= 0:
-        return max(0.0, S - K)
-    d1 = (log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt(T))
-    d2 = d1 - sigma * sqrt(T)
-    return S * _norm_cdf(d1) - K * exp(-r * T) * _norm_cdf(d2)
 
 
 def simulate_calendar_trade(

@@ -1,37 +1,109 @@
-# Earnings Volatility (IV Crush) Trading App
+# 📉 Volatility Engine — Earnings IV-Crush Trading App
 
-Detects, structures, and sizes earnings-based **Long Calendar Spread** options trades
-by capitalizing on implied-volatility crush. Implements PRD v3.1.
+Detects, structures, and sizes earnings-based **Long Calendar Spread** options trades by
+capitalizing on implied-volatility crush. Implements **PRD v3.1** with a dark,
+mobile-responsive Streamlit dashboard.
 
-- `engine.py` — `VolatilityEngine`: all backend math (metrics, signal routing, Kelly,
-  trade structuring, Monte Carlo validation).
-- `data_provider.py` — `IBKRDataProvider`: live market data via IBKR + `ib_insync`.
-- `backtest.py` — Black-Scholes calendar-spread backtest that *derives* the strategy's
-  win rate / avg win / avg loss (which then drive Kelly sizing and Monte Carlo).
-- `app.py` — Streamlit UI: inputs, signal banner, metric table, trade legs, position
-  sizing, backtest, and Monte Carlo fan chart.
+| File | Purpose |
+|---|---|
+| `engine.py` | `VolatilityEngine` — all strategy math: metrics, signal routing, Kelly sizing, trade structuring, exit protocols, Monte Carlo. |
+| `app.py` | Streamlit UI — signal hero + gate pills, metric cards, IV charts, trade plan with payoff diagram, live backtest & Monte Carlo. |
+| `backtest.py` | Black-Scholes calendar-spread backtest that **derives** win rate / avg win / avg loss (feeding Kelly + Monte Carlo). |
+| `data_provider.py` | `IBKRDataProvider` — live/delayed market data via Interactive Brokers + `ib_insync`. |
+| `tests/test_engine.py` | Sanity tests for every engine formula and the backtest. |
 
-## Setup
+---
+
+## 🚀 Quick start (step by step)
+
+**Prerequisites:** Python **3.10+** (3.11 recommended) and `pip`. Nothing else is needed
+for demo mode — live data via IBKR is optional (see below).
 
 ```bash
-cd /Users/vk/StartUps/VolatilityEngine
+# 1. Clone and enter the repo
+git clone https://github.com/vladachini/VolatilityEngine.git
+cd VolatilityEngine
+
+# 2. Create and activate a virtual environment
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
-```
 
-## Run
-
-```bash
+# 4. Launch the app
 streamlit run app.py
 ```
 
-Opens at http://localhost:8501. Click **🎯 Load demo ticker** in the sidebar to
-populate a clean "Recommend" setup and exercise every panel immediately.
+The app opens at **http://localhost:8501**. On first load it's already evaluating a
+clean *Recommend* setup — press **🎯 Load demo ticker** in the sidebar at any time to
+reset to it. The backtest and Monte Carlo panels compute live; drag their sliders and
+everything re-derives instantly.
 
-## Live data via Interactive Brokers (`ib_insync`)
+**📱 Mobile:** the layout is fully responsive — cards reflow, charts resize, and the
+sidebar collapses behind the `»` toggle (top-left). To open it from your phone on the
+same network: `streamlit run app.py --server.address 0.0.0.0`, then browse to
+`http://<your-computer-ip>:8501`.
 
-The app can pull live/delayed market data straight from IBKR.
+**Run the tests / standalone backtest:**
+
+```bash
+python tests/test_engine.py    # or: python -m pytest tests/ -q
+python backtest.py             # prints derived win rate, Kelly, CAGR, Sharpe...
+```
+
+---
+
+## 🧠 The strategy (PRD v3.1)
+
+Ahead of earnings, front-week implied volatility is systematically bid up. A **long
+calendar spread** (sell the front-week ATM option, buy the same strike ~30 days out)
+harvests the collapse ("IV crush") of that front-week premium after the announcement.
+
+**Signal routing (§3)** — deterministic gates, all surfaced as pills in the UI:
+
+| Signal | Condition |
+|---|---|
+| 🟢 **Recommend** | Backwardation **and** ADV > 1M **and** IV/RV > 1.2 **and** IV percentile ≥ 70% |
+| 🟡 **Consider** | Backwardation, but ≥ 1 other gate fails |
+| 🔴 **Avoid** | No backwardation (`Slope = IV_near − IV_45 ≤ 0`) — the edge does not exist |
+
+> Sign convention: backwardation = **elevated front-week IV**, i.e. `Slope > 0`.
+> (The PRD prose called this "negative slope" — a labeling error; the math here is verified.)
+
+**Quant filters & risk (§5–§7):**
+
+- **IV percentile (6.1)** — current IV vs a 252-day window; ≥ 70% required.
+- **Expected Move (6.2)** — `EM ≈ 0.85 × (ATM call + ATM put)`, shown in $ and % of spot.
+- **Magnitude premium (6.3)** — `EM% > 1.25 × mean historical earnings move%` upgrades a
+  Recommend to **★ High conviction**. *(Fixed: this comparison is now done in
+  like-for-like units — % of spot — instead of dollars vs fractions.)*
+- **Strike tilt (6.4)** — when |mean quarterly drift| > 1% (configurable), the strike is
+  shifted ±0.5×EM in the drift direction to cheapen the debit.
+- **Exit protocols (6.5)** — quantified in the trade panel: take-profit alerts at
+  **+25% / +35%** on debit, a **velocity exit** IV level (if ≥80% of the expected crush
+  prints in the first 5 minutes, get out), and max loss = debit paid.
+- **Sizing (§5)** — `f* = p − q/b` → 10% fractional Kelly ≈ **3.24%** suggested, under a
+  hard **6% max-debit cap**; the UI converts both into whole contract counts.
+- **Validation (§7)** — Monte Carlo: 500 trades × 1,000 paths fan chart (5/50/95th
+  percentiles), **Risk of Ruin** (P of a ≥50% drawdown), and P(finish below start). You
+  can size at the 6% cap or the applied Kelly and compare.
+
+**Backtest (§5/§7)** — `backtest.py` prices an ATM calendar with Black-Scholes before and
+after each earnings event. The edge comes from the two real effects (front-week IV crush
+toward the back-month level + the vol-risk premium: realized moves average smaller than
+implied), while large surprises produce the loss tail. It reports win rate, avg win/loss,
+profit factor, expectancy, CAGR, max drawdown, Sharpe, and an **empirical Kelly** — all
+independent of the PRD's hard-coded constants, so the assumed edge is *checked*, not
+asserted. The Monte Carlo can run on either the PRD constants or these derived stats.
+Events are a cross-sectional sample (growth annualized via trades/year); trades are
+skipped if the calendar isn't a valid debit ≥ 0.4% of spot.
+
+---
+
+## 🔌 Live data via Interactive Brokers (optional)
+
+The app can pull live/delayed data straight from IBKR with `ib_insync`.
 
 **One-time setup**
 1. Install **Trader Workstation (TWS)** or **IB Gateway** and log in (paper or live).
@@ -40,8 +112,8 @@ The app can pull live/delayed market data straight from IBKR.
 4. Without an OPRA options subscription, use **Delayed** market data (the app's default).
 
 **In the app:** sidebar → *Data source → IBKR (ib_insync)* → set host/port → **📡 Fetch
-live data**. Fetched IV term structure, IV/RV, ADV, ATM straddle, and IV history populate
-the inputs, then the engine re-evaluates automatically.
+live data**. The fetched IV term structure, IV/RV, ADV, ATM straddle, and IV history
+populate the inputs and the engine re-evaluates automatically.
 
 **Headless / CLI test** (with TWS or Gateway running):
 ```bash
@@ -50,8 +122,6 @@ python data_provider.py AAPL --port 7497          # paper TWS, delayed data
 
 **Cloud deployment:** identical code — run IB Gateway headless (e.g. via IBC) on the
 server and point host/port at it. Nothing assumes a GUI.
-
-What gets mapped from IBKR → engine:
 
 | Engine input | IBKR source |
 |---|---|
@@ -62,41 +132,21 @@ What gets mapped from IBKR → engine:
 | `atm_call`, `atm_put` | front-week ATM straddle quotes |
 | `historical_moves` | proxy = N largest absolute daily moves (true earnings dates need a fundamentals subscription) |
 
-## Backtest & Monte Carlo (strategy validation, PRD §5 & §7)
+---
 
-The app has two validation layers under the signal:
+## ☁️ Deploying (free, shareable URL)
 
-1. **Backtest** (`backtest.py`) — prices an ATM long calendar with Black-Scholes
-   before and after each earnings event. The edge comes from modeling the two real
-   effects: front-week **IV crush** toward the back-month level, and the **vol-risk
-   premium** (realized moves average smaller than the straddle-implied move); large
-   realized moves push the underlying off-strike and create the loss tail. It outputs
-   win rate, avg win/loss, profit factor, expectancy, CAGR, max drawdown, Sharpe, and
-   an **empirical Kelly** — independent of the PRD's hard-coded constants, so you can
-   sanity-check the assumed edge. Run standalone: `python backtest.py`.
-2. **Monte Carlo** (`engine.run_monte_carlo`) — 500 trades × 1000 paths under the 6%
-   sizing rule; plots 5th/50th/95th percentile equity curves and Risk of Ruin. It can
-   consume the **backtest-derived** win/loss stats instead of the PRD constants (toggle
-   in the UI).
+[Streamlit Community Cloud](https://share.streamlit.io): point it at this repo,
+`app.py` as the entrypoint — the included `.streamlit/config.toml` carries the dark
+theme. Works on any phone browser. (For IBKR data in the cloud you'd run IB Gateway
+on a reachable host; demo/manual mode needs nothing.)
 
-Notes on interpretation:
-- The backtest's events are a **cross-sectional sample** (distribution of outcomes),
-  not a single 2,000-trade timeline — growth is reported as **CAGR** annualized by an
-  assumed trades/year, not raw compounded return.
-- A trade is skipped if the calendar isn't a valid debit structure (front leg richer
-  than back) or the debit is < 0.4% of spot (unrealistic leverage).
-- Signal convention: the engine recommends on **backwardation** — `Slope = IV_near -
-  IV_45 > 0` (elevated front-week IV, the IV-crush setup). This matches the P&L model
-  here. (The PRD text labeled this "negative slope," which was an error; the gate was
-  corrected to `slope > 0`.) The backtest validates trade **economics + sizing**;
-  signal gating lives in `evaluate_ticker`.
+---
 
-## Notes
+## ⚠️ Notes
 
-- Sizing surfaces both the PRD's applied 10% Kelly (~3.25%) and the hardcoded 6% max
-  debit cap, which differ in the PRD by design.
-- `historical_moves` is currently a transparent proxy (largest daily moves), since exact
-  earnings dates require an IBKR fundamentals subscription. Swap in real earnings dates
-  when that data source is available.
-- Educational tool — not investment advice.
-```
+- The 6% cap and the ~3.24% applied Kelly differ **by design** (PRD §5): Kelly is the
+  suggestion, 6% is the never-exceed ceiling. The UI shows both, in dollars and contracts.
+- `historical_moves` from IBKR is a transparent proxy (largest daily moves) until an
+  earnings-dates data source is wired in.
+- Educational tool — **not investment advice**. Verify every quote with your broker.
