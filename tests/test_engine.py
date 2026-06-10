@@ -21,18 +21,19 @@ from engine import (  # noqa: E402
     bs_call,
 )
 from backtest import BacktestConfig, run_backtest  # noqa: E402
+from demo import DEFAULT_HIST_MOVES, DEMO, demo_iv_history  # noqa: E402
 
 
 def _recommend_kwargs(**overrides):
-    """A clean Recommend setup (mirrors the app's demo ticker)."""
-    rng = np.random.default_rng(7)
+    """The app's demo ticker — a clean Recommend setup (single source: demo.py)."""
     base = dict(
-        iv_near=0.85, iv_45=0.55, iv_30=0.70, rv_30=0.45,
-        avg_30day_volume=4_500_000,
-        historical_iv_series=pd.Series(np.clip(rng.normal(0.45, 0.08, 252), 0.15, 0.95)),
-        atm_call_price=4.20, atm_put_price=3.90,
-        historical_moves=[0.028, -0.034, 0.025, -0.041, 0.030, -0.022],
-        spot_price=150.0,
+        iv_near=DEMO["iv_near"], iv_45=DEMO["iv_45"],
+        iv_30=DEMO["iv_30"], rv_30=DEMO["rv_30"],
+        avg_30day_volume=DEMO["volume"],
+        historical_iv_series=pd.Series(demo_iv_history()),
+        atm_call_price=DEMO["atm_call"], atm_put_price=DEMO["atm_put"],
+        historical_moves=list(DEFAULT_HIST_MOVES),
+        spot_price=DEMO["spot"],
     )
     base.update(overrides)
     return base
@@ -83,8 +84,9 @@ def test_magnitude_premium_units():
     """§6.3 must compare EM and historical moves in the same unit (% of spot)."""
     res = VolatilityEngine.evaluate_ticker(**_recommend_kwargs())
     m = res["metrics"]
-    # EM = $6.885 on a $150 spot → 4.59% vs hist 3.0% × 1.25 = 3.75% → premium
-    assert abs(m["expected_move_pct"] - 6.885 / 150.0) < 1e-9
+    # Demo: EM ≈ $6.885 on a $150 spot → 4.59% vs hist 3.0% × 1.25 = 3.75% → premium
+    em = VolatilityEngine.calculate_expected_move(DEMO["atm_call"], DEMO["atm_put"])
+    assert abs(m["expected_move_pct"] - em / DEMO["spot"]) < 1e-9
     assert m["magnitude_premium_detected"] is True
     assert res["conviction"] == "High"
     # Bigger historical moves (6% mean → 7.5% bar) kill the premium, not the signal

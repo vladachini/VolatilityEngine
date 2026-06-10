@@ -33,10 +33,13 @@ HISTORICAL_AVG_LOSS = 0.35         # Average loss on debit paid (-35%)
 MAX_PORTFOLIO_FRACTION = 0.06      # Hard 6% max-debit cap (PRD 5)
 KELLY_MULTIPLIER = 0.10            # Fractional Kelly multiplier (PRD 5)
 IV_PERCENTILE_FLOOR = 70.0         # Recommend gate (PRD 6.1)
+EM_STRADDLE_MULT = 0.85            # EM ~= 0.85 x ATM straddle (PRD 6.2)
 MAGNITUDE_PREMIUM_MULT = 1.25      # EM must exceed hist move x1.25 (PRD 6.3)
 TAKE_PROFIT_BAND = (0.25, 0.35)    # Exit alert band on debit (PRD 6.5)
 VELOCITY_CRUSH_FRACTION = 0.80     # >=80% of expected crush in 5 min (PRD 6.5)
 DRIFT_THRESHOLD = 0.01             # Min |mean quarterly drift| for strike tilt (PRD 6.4)
+T_NEAR_DAYS = 7.0                  # Assumed front-week leg tenor (days)
+T_FAR_DAYS = 37.0                  # Assumed back-month leg tenor (days)
 
 
 def _norm_cdf(x: float) -> float:
@@ -91,7 +94,7 @@ class VolatilityEngine:
     @staticmethod
     def calculate_expected_move(atm_call_price: float, atm_put_price: float) -> float:
         """1-sigma Expected Move in dollars: EM ~= 0.85 * (ATM call + ATM put)."""
-        return 0.85 * (atm_call_price + atm_put_price)
+        return EM_STRADDLE_MULT * (atm_call_price + atm_put_price)
 
     # ------------------------------------------------------------------
     # §5 Sizing
@@ -127,8 +130,9 @@ class VolatilityEngine:
         strike: float,
         iv_near: float,
         iv_45: float,
-        t_near_days: float = 7.0,
-        t_far_days: float = 37.0,
+        t_near_days: float = T_NEAR_DAYS,
+        t_far_days: float = T_FAR_DAYS,
+        r: float = 0.0,
     ) -> float:
         """
         Model-based estimate of the calendar debit per share:
@@ -137,8 +141,8 @@ class VolatilityEngine:
         """
         if spot_price <= 0 or strike <= 0:
             return 0.0
-        debit = bs_call(spot_price, strike, t_far_days / 365.0, iv_45) - bs_call(
-            spot_price, strike, t_near_days / 365.0, iv_near
+        debit = bs_call(spot_price, strike, t_far_days / 365.0, iv_45, r) - bs_call(
+            spot_price, strike, t_near_days / 365.0, iv_near, r
         )
         return max(0.0, debit)
 

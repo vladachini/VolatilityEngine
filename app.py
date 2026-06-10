@@ -20,10 +20,13 @@ from engine import (
     HISTORICAL_WIN_RATE,
     KELLY_MULTIPLIER,
     MAX_PORTFOLIO_FRACTION,
+    T_FAR_DAYS,
+    T_NEAR_DAYS,
     VolatilityEngine,
     bs_call,
 )
 from backtest import BacktestConfig, run_backtest
+from demo import DEFAULT_HIST_MOVES, DEMO, demo_iv_history
 
 st.set_page_config(
     page_title="Volatility Engine — Earnings IV Crush",
@@ -192,6 +195,12 @@ def rows_panel(rows: list, lead: str = "") -> str:
     return f'<div class="ve-panel">{lead}<div class="ve-rows">{body}</div></div>'
 
 
+def ve_table(headers: list, rows_html: str) -> str:
+    head = "".join(f"<th>{h}</th>" for h in headers)
+    return (f'<div class="ve-panel" style="padding:.4rem .5rem;"><table class="ve-table">'
+            f'<thead><tr>{head}</tr></thead><tbody>{rows_html}</tbody></table></div>')
+
+
 def base_layout(**kw) -> dict:
     lay = dict(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -215,30 +224,12 @@ def show_chart(fig: go.Figure, height: int = 300) -> None:
 
 
 # ==================================================================
-# Demo seed & session helpers
+# Demo seed & session helpers (fixture shared with tests via demo.py)
 # ==================================================================
-DEMO = {
-    "ticker": "DEMO",
-    "portfolio": 100_000.0,
-    "spot": 150.0,
-    "iv_near": 0.85,      # elevated front-week IV (earnings premium)
-    "iv_45": 0.55,        # 45+ day IV -> slope > 0 (backwardation)
-    "iv_30": 0.70,
-    "rv_30": 0.45,        # IV/RV = 1.55 (> 1.2 threshold)
-    "volume": 4_500_000,
-    "atm_call": 4.20,
-    "atm_put": 3.90,
-    "drift": 0.018,       # mild upward historical drift
-}
-DEFAULT_HIST_MOVES = [0.028, -0.034, 0.025, -0.041, 0.030, -0.022]  # mean |move| ≈ 3%
-
-
 def _seed_demo():
     for k, v in DEMO.items():
         st.session_state[f"in_{k}"] = v
-    rng = np.random.default_rng(7)
-    hist = np.clip(rng.normal(0.45, 0.08, 252), 0.15, 0.95)
-    st.session_state["iv_history"] = hist.tolist()
+    st.session_state["iv_history"] = demo_iv_history()
     st.session_state["hist_moves"] = list(DEFAULT_HIST_MOVES)
 
 
@@ -460,7 +451,7 @@ ch1, ch2 = st.columns(2)
 with ch1:
     section("IV term structure", "front-week premium vs 45d")
     fig = go.Figure()
-    xs, ys = [7, 30, 45], [iv_near * 100, iv_30 * 100, iv_45 * 100]
+    xs, ys = [int(T_NEAR_DAYS), 30, 45], [iv_near * 100, iv_30 * 100, iv_45 * 100]
     fig.add_trace(go.Scatter(
         x=xs, y=ys, mode="lines+markers+text",
         text=[f"{v:.0f}%" for v in ys], textposition="top center",
@@ -541,12 +532,8 @@ if signal == "Recommend":
             f'<td class="mono">${leg["strike"]:,.2f}</td><td>{leg["expiry"]}</td></tr>'
             for leg in spread["legs"]
         )
-        st.markdown(
-            f'<div class="ve-panel" style="padding:.4rem .5rem;"><table class="ve-table">'
-            f'<thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Expiry</th></tr></thead>'
-            f'<tbody>{legs_rows}</tbody></table></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(ve_table(["Leg", "Action", "Strike", "Expiry"], legs_rows),
+                    unsafe_allow_html=True)
         st.caption(f"Strike **${strike:,.2f}** · {spread['rationale']}")
         debit_in = st.number_input(
             "Calendar debit per spread ($/share — overwrite with your broker's quote)",
@@ -587,7 +574,9 @@ if signal == "Recommend":
     with tcol2:
         section("Payoff at front expiry", "per 1 spread, back leg at IV_45")
         S_range = np.linspace(spot * 0.82, spot * 1.18, 121)
-        vals = np.array([bs_call(s, strike, 30.0 / 365.0, iv_45) - max(s - strike, 0.0)
+        t_back_left = (T_FAR_DAYS - T_NEAR_DAYS) / 365.0  # back-leg tenor remaining
+        vals = np.array([bs_call(s, strike, t_back_left, iv_45)
+                         - bs_call(s, strike, 0.0, iv_near)
                          for s in S_range])
         pnl = (vals - debit_in) * 100.0
         pos = np.where(pnl >= 0, pnl, np.nan)
@@ -672,12 +661,8 @@ with tab_bt:
                 ("Sharpe (annual)", f"{bt['sharpe_annual']:.2f}", "—"),
             ]
         )
-        st.markdown(
-            f'<div class="ve-panel" style="padding:.4rem .5rem;"><table class="ve-table">'
-            f'<thead><tr><th>Metric</th><th>Backtest</th><th>PRD ref</th></tr></thead>'
-            f'<tbody>{stat_rows}</tbody></table></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(ve_table(["Metric", "Backtest", "PRD ref"], stat_rows),
+                    unsafe_allow_html=True)
         st.caption(f"{bt['n_trades']:,} valid trades · Empirical Kelly: full "
                    f"**{ek['full_kelly']:.1%}**, applied 10% → **{ek['fractional_kelly']:.2%}** "
                    f"(vs {MAX_PORTFOLIO_FRACTION:.0%} cap).")

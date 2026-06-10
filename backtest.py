@@ -44,10 +44,13 @@ import numpy as np
 import pandas as pd
 
 from engine import (
+    EM_STRADDLE_MULT,
     HISTORICAL_AVG_LOSS,
     HISTORICAL_AVG_WIN,
     HISTORICAL_WIN_RATE,
     MAX_PORTFOLIO_FRACTION,
+    T_FAR_DAYS,
+    T_NEAR_DAYS,
     VolatilityEngine,
     bs_call,
 )
@@ -62,8 +65,8 @@ def simulate_calendar_trade(
     iv_far_post: float,
     realized_move: float,
     spot: float = 100.0,
-    t_near_days: float = 7.0,
-    t_far_days: float = 37.0,
+    t_near_days: float = T_NEAR_DAYS,
+    t_far_days: float = T_FAR_DAYS,
     hold_days: float = 1.0,
     r: float = 0.0,
     min_debit_frac: float = 0.004,
@@ -75,8 +78,9 @@ def simulate_calendar_trade(
     implies unrealistic leverage no desk would actually put on.
     """
     K = spot
-    T_near, T_far = t_near_days / 365.0, t_far_days / 365.0
-    entry_debit = bs_call(spot, K, T_far, iv_far, r) - bs_call(spot, K, T_near, iv_near, r)
+    entry_debit = VolatilityEngine.estimate_calendar_debit(
+        spot, K, iv_near, iv_far, t_near_days=t_near_days, t_far_days=t_far_days, r=r
+    )
     if entry_debit <= min_debit_frac * spot:
         return None
 
@@ -114,7 +118,7 @@ def generate_synthetic_events(cfg: BacktestConfig) -> pd.DataFrame:
 
     # Front straddle implies a ~1-event expected move; realized is centered smaller
     # (vol-risk premium) with fat tails (occasional large surprises).
-    implied_move = 0.85 * (0.80 * iv_near * sqrt(7.0 / 365.0))  # EM as fraction of spot
+    implied_move = EM_STRADDLE_MULT * (0.80 * iv_near * np.sqrt(T_NEAR_DAYS / 365.0))
     t_draw = rng.standard_t(cfg.tail_df, n) / sqrt(cfg.tail_df / (cfg.tail_df - 2.0))
     realized_move = cfg.realized_vrp * implied_move * t_draw
 
