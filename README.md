@@ -48,7 +48,7 @@ same network: `streamlit run app.py --server.address 0.0.0.0`, then browse to
 **Run the tests / standalone backtest:**
 
 ```bash
-python tests/test_engine.py    # or: python -m pytest tests/ -q
+python tests/test_engine.py    # no extra deps (pytest also works if installed)
 python backtest.py             # prints derived win rate, Kelly, CAGR, Sharpe...
 ```
 

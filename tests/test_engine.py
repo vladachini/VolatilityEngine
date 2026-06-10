@@ -1,9 +1,9 @@
 """
 Sanity tests for VolatilityEngine + backtest (PRD v3.1 math).
 
-Run with either:
-    python -m pytest tests/ -q
-    python tests/test_engine.py
+Run with:
+    python tests/test_engine.py          # no extra dependencies
+    python -m pytest tests/ -q           # if pytest is installed
 """
 import os
 import sys
