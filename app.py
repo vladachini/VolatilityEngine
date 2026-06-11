@@ -8,6 +8,8 @@ protocols, and live backtest + Monte Carlo validation.
 
 Run:  streamlit run app.py
 """
+import re
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -257,11 +259,46 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 st.sidebar.divider()
+if "flash" in st.session_state:
+    st.sidebar.success(st.session_state.pop("flash"))
 
-source = st.sidebar.radio("Data source", ["Manual / Demo", "IBKR (ib_insync)"], index=0)
+source = st.sidebar.radio(
+    "Data source",
+    ["Manual / Demo", "Yahoo (yfinance) — free", "IBKR (ib_insync)"],
+    index=0,
+)
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def _yf_fetch(symbol: str) -> dict:
+    from data_provider_yf import fetch_yf_metrics
+    return fetch_yf_metrics(symbol)
+
 
 if source == "Manual / Demo":
     st.sidebar.button("🎯 Load demo ticker", on_click=_seed_demo, width="stretch", type="primary")
+elif source.startswith("Yahoo"):
+    with st.sidebar.expander("🌐 Yahoo Finance", expanded=True):
+        st.caption("Free & keyless · ~15-min delayed quotes · real earnings dates. "
+                   "IV-percentile history uses a realized-vol proxy (see README).")
+        yf_symbol = st.text_input("Symbol to fetch", value=_get("ticker", "AAPL"),
+                                  key="yf_symbol").upper()
+        if st.button("📡 Fetch from Yahoo", width="stretch", type="primary"):
+            try:
+                with st.spinner(f"Fetching {yf_symbol} from Yahoo..."):
+                    data = _yf_fetch(yf_symbol)
+                _seed_from_ibkr(data)
+                meta = data.get("_meta", {})
+                ne = meta.get("next_earnings")
+                st.session_state["flash"] = (
+                    f"Fetched {yf_symbol}: ATM {meta.get('atm_strike')} · "
+                    f"near {meta.get('near_expiry')} ({meta.get('days_to_near')}d)"
+                    + (f" · next earnings {ne}" if ne else "")
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Yahoo fetch failed: {e}")
+                st.caption("Yahoo rate-limits busy IPs — wait a minute and retry.")
 else:
     with st.sidebar.expander("🔌 IBKR connection", expanded=True):
         ib_symbol = st.text_input("Symbol to fetch", value=_get("ticker", "AAPL")).upper()
@@ -284,7 +321,7 @@ else:
                     )
                 _seed_from_ibkr(data)
                 meta = data.get("_meta", {})
-                st.success(
+                st.session_state["flash"] = (
                     f"Fetched {ib_symbol}: ATM {meta.get('atm_strike')} · "
                     f"near {meta.get('near_expiry')} ({meta.get('days_to_near')}d) · "
                     f"45-leg {meta.get('exp_45')} ({meta.get('days_to_45leg')}d)"
@@ -632,7 +669,9 @@ def cached_mc(capital: float, win_rate: float, avg_win: float, avg_loss: float,
     )
 
 
-tab_bt, tab_mc = st.tabs(["📜 Backtest", "🎲 Monte Carlo"])
+tab_bt, tab_mc, tab_scan = st.tabs(["📜 Backtest", "🎲 Monte Carlo", "🔎 Scanner"])
+
+REAL_EVENT_COLS = ["iv_near", "iv_far", "iv_near_post", "iv_far_post", "realized_move"]
 
 with tab_bt:
     st.caption("Prices an ATM calendar through each earnings event with Black-Scholes to "
@@ -641,7 +680,27 @@ with tab_bt:
     bc1, bc2 = st.columns(2)
     bt_events = bc1.slider("Earnings events", 200, 5000, 2000, step=100)
     bt_per_year = bc2.slider("Trades / year (CAGR & Sharpe)", 10, 100, 50, step=5)
-    bt = cached_backtest(int(bt_events), int(bt_per_year), float(portfolio))
+    with st.expander("📤 Use real earnings events (CSV) instead of the synthetic universe"):
+        st.caption("Columns: `" + "`, `".join(REAL_EVENT_COLS) + "` — IVs as decimals "
+                   "(0.85 = 85%), `realized_move` as a signed fraction (0.04 = +4%).")
+        events_file = st.file_uploader("Events CSV", type=["csv"], label_visibility="collapsed")
+
+    bt, bt_source = None, f"synthetic universe · {int(bt_events):,} events"
+    if events_file is not None:
+        try:
+            ev = pd.read_csv(events_file)
+            missing = set(REAL_EVENT_COLS) - set(ev.columns)
+            if missing:
+                st.error(f"CSV is missing columns: {sorted(missing)} — using synthetic events.")
+            else:
+                bt = run_backtest(events=ev, cfg=BacktestConfig(
+                    starting_capital=float(portfolio), trades_per_year=int(bt_per_year)))
+                bt_source = f"real events CSV · {len(ev):,} rows (events slider ignored)"
+        except Exception as e:
+            st.error(f"Could not read events CSV: {e} — using synthetic events.")
+    if bt is None:
+        bt = cached_backtest(int(bt_events), int(bt_per_year), float(portfolio))
+    st.caption(f"Source: **{bt_source}**")
     prd = bt["prd_reference"]
     ek = bt["empirical_kelly"]
 
@@ -754,6 +813,69 @@ with tab_mc:
                     f"across {mc['n_paths']:,} paths",
                     "good" if mc["prob_below_start"] < 0.05 else "warn"),
     ])
+
+with tab_scan:
+    st.caption("Scan a watchlist via **Yahoo Finance** (free, ~15-min delayed) and rank by "
+               "signal → conviction → IV percentile. Uses the sidebar thresholds.")
+    watch = st.text_area(
+        "Tickers (comma / space separated)",
+        value="AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, AMD",
+        height=70,
+    )
+    if st.button("🔎 Scan watchlist", type="primary"):
+        syms = sorted({s.strip().upper() for s in re.split(r"[,\s]+", watch) if s.strip()})
+        rows, errors = [], []
+        prog = st.progress(0.0, text="Scanning…")
+        for i, sym in enumerate(syms):
+            try:
+                d = _yf_fetch(sym)
+                r = VolatilityEngine.evaluate_ticker(
+                    iv_near=d["iv_near"], iv_45=d["iv_45"], iv_30=d["iv_30"],
+                    rv_30=d["rv_30"], avg_30day_volume=int(d["volume"]),
+                    historical_iv_series=pd.Series(d["historical_iv_series"]),
+                    atm_call_price=d["atm_call"], atm_put_price=d["atm_put"],
+                    historical_moves=d["hist_moves"], spot_price=float(d["spot"]),
+                    vol_threshold=int(vol_threshold), iv_rv_threshold=float(iv_rv_threshold),
+                )
+                mm = r["metrics"]
+                emoji = {"Recommend": "🟢", "Consider": "🟡", "Avoid": "🔴"}[r["signal"]]
+                rows.append({
+                    "Ticker": sym,
+                    "Signal": f"{emoji} {r['signal']}",
+                    "Conviction": "★ High" if r["conviction"] == "High"
+                                  else (r["conviction"] or "—"),
+                    "Slope": round(mm["term_structure_slope"], 3),
+                    "IV/RV": round(mm["iv_rv_ratio"], 2),
+                    "IV %ile": round(mm["iv_percentile"]),
+                    "EM %": round(mm["expected_move_pct"] * 100, 1),
+                    "ADV (M)": round(mm["avg_30day_volume"] / 1e6, 1),
+                    "Next earnings": (d.get("_meta") or {}).get("next_earnings") or "—",
+                })
+            except Exception as e:
+                errors.append(f"{sym}: {e}")
+            prog.progress((i + 1) / len(syms), text=f"Scanned {sym} ({i + 1}/{len(syms)})")
+        prog.empty()
+        sig_rank = {"🟢 Recommend": 0, "🟡 Consider": 1, "🔴 Avoid": 2}
+        conv_rank = {"★ High": 0, "Standard": 1, "—": 2}
+        rows.sort(key=lambda x: (sig_rank[x["Signal"]],
+                                 conv_rank.get(x["Conviction"], 2), -x["IV %ile"]))
+        st.session_state["scan_rows"] = rows
+        st.session_state["scan_errors"] = errors
+
+    if st.session_state.get("scan_rows"):
+        st.dataframe(pd.DataFrame(st.session_state["scan_rows"]),
+                     hide_index=True, width="stretch")
+        pick_cols = st.columns([3, 2])
+        pick = pick_cols[0].selectbox(
+            "Load a scanned ticker into the engine",
+            [r["Ticker"] for r in st.session_state["scan_rows"]],
+        )
+        if pick_cols[1].button(f"Load {pick} into inputs", width="stretch"):
+            _seed_from_ibkr(_yf_fetch(pick))
+            st.session_state["flash"] = f"Loaded {pick} from the scan."
+            st.rerun()
+    for err in st.session_state.get("scan_errors", []):
+        st.caption(f"⚠️ {err}")
 
 st.markdown(
     '<div class="ve-foot">Volatility Engine · educational tool — not investment advice. '

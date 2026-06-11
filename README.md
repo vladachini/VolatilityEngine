@@ -7,10 +7,12 @@ mobile-responsive Streamlit dashboard.
 | File | Purpose |
 |---|---|
 | `engine.py` | `VolatilityEngine` — all strategy math: metrics, signal routing, Kelly sizing, trade structuring, exit protocols, Monte Carlo. |
-| `app.py` | Streamlit UI — signal hero + gate pills, metric cards, IV charts, trade plan with payoff diagram, live backtest & Monte Carlo. |
-| `backtest.py` | Black-Scholes calendar-spread backtest that **derives** win rate / avg win / avg loss (feeding Kelly + Monte Carlo). |
+| `app.py` | Streamlit UI — signal hero + gate pills, metric cards, IV charts, trade plan with payoff diagram, watchlist scanner, live backtest & Monte Carlo. |
+| `backtest.py` | Black-Scholes calendar-spread backtest that **derives** win rate / avg win / avg loss (feeding Kelly + Monte Carlo). Accepts real-event CSVs. |
+| `data_provider_yf.py` | **Yahoo Finance provider** — free, keyless live data incl. real earnings dates. |
 | `data_provider.py` | `IBKRDataProvider` — live/delayed market data via Interactive Brokers + `ib_insync`. |
-| `tests/test_engine.py` | Sanity tests for every engine formula and the backtest. |
+| `demo.py` | The demo fixture shared by the app and the tests. |
+| `tests/` | Offline sanity tests for the engine, backtest, and Yahoo data-massaging helpers. |
 
 ---
 
@@ -99,9 +101,31 @@ asserted. The Monte Carlo can run on either the PRD constants or these derived s
 Events are a cross-sectional sample (growth annualized via trades/year); trades are
 skipped if the calendar isn't a valid debit ≥ 0.4% of spot.
 
+**Real events:** the Backtest tab accepts a CSV (columns `iv_near, iv_far, iv_near_post,
+iv_far_post, realized_move`) and runs the identical pricing on your own historical
+earnings data instead of the synthetic universe.
+
 ---
 
-## 🔌 Live data via Interactive Brokers (optional)
+## 🌐 Live data — two options
+
+### Option A: Yahoo Finance (free — no account, no API key)
+
+Works out of the box: sidebar → *Data source → Yahoo (yfinance)* → enter a symbol →
+**📡 Fetch from Yahoo**. Spot, ATM IVs (near / interpolated 30d / ~45d), realized vol,
+ADV, the front-week straddle, **real past earnings reactions and the next earnings
+date** all populate automatically.
+
+The **🔎 Scanner** tab scans a whole watchlist through Yahoo and ranks tickers by
+signal → conviction → IV percentile, with one-click loading into the engine.
+
+Honest limitations (also in `data_provider_yf.py`):
+- Quotes are ~15-min delayed — fine for setup detection, not for the §6.5 velocity exit.
+- Yahoo has no IV *history*, so the IV-percentile series uses a trailing 30-day
+  realized-vol distribution as a documented proxy. IBKR provides the true series.
+- Yahoo rate-limits aggressive IPs; the app caches fetches for 10 minutes.
+
+### Option B: Interactive Brokers (real-time, OPRA-quality)
 
 The app can pull live/delayed data straight from IBKR with `ib_insync`.
 
