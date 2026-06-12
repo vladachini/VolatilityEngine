@@ -8,6 +8,7 @@ protocols, and live backtest + Monte Carlo validation.
 
 Run:  streamlit run app.py
 """
+import html
 import re
 
 import numpy as np
@@ -32,7 +33,7 @@ from demo import DEFAULT_HIST_MOVES, DEMO, demo_iv_history
 
 st.set_page_config(
     page_title="Volatility Engine — Earnings IV Crush",
-    page_icon="📉",
+    page_icon=":material/candlestick_chart:",
     layout="wide",
 )
 
@@ -47,17 +48,20 @@ CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 :root{
-  --panel:rgba(148,163,184,.055); --panel-border:rgba(148,163,184,.15);
+  --panel:rgba(148,163,184,.055); --panel-border:rgba(148,163,184,.14);
+  --panel-border-hi:rgba(148,163,184,.30);
   --muted:#94a3b8; --green:#34d399; --amber:#fbbf24; --red:#f87171;
-  --indigo:#818cf8; --cyan:#22d3ee; --radius:16px;
+  --indigo:#818cf8; --cyan:#22d3ee; --radius:14px;
+  --ease:cubic-bezier(.22,.9,.3,1);
 }
 html, body, [data-testid="stAppViewContainer"], button, input, textarea{
   font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  -webkit-font-smoothing:antialiased;
 }
 [data-testid="stAppViewContainer"]{
   background:
-    radial-gradient(1100px 560px at 12% -8%, rgba(99,102,241,.17), transparent 60%),
-    radial-gradient(900px 480px at 108% 6%, rgba(34,211,238,.10), transparent 55%),
+    radial-gradient(1100px 540px at 12% -8%, rgba(99,102,241,.13), transparent 60%),
+    radial-gradient(900px 460px at 108% 6%, rgba(34,211,238,.07), transparent 55%),
     #0a1120;
 }
 [data-testid="stHeader"]{ background:transparent; }
@@ -71,102 +75,167 @@ html, body, [data-testid="stAppViewContainer"], button, input, textarea{
   border-right:1px solid var(--panel-border);
 }
 [data-testid="stSidebar"] .block-container{ padding-top:1.4rem; }
-.ve-brand{ font-size:1.05rem; font-weight:800; letter-spacing:-.02em; }
-.ve-brand .sub{ color:var(--muted); font-weight:500; font-size:.78rem; margin-top:.15rem; }
 
+/* ---- motion ---- */
+@keyframes veFadeUp{ from{ opacity:0; transform:translateY(7px); } to{ opacity:1; transform:none; } }
+@keyframes vePing{ 0%{ transform:scale(1); opacity:.55; } 75%,100%{ transform:scale(2.4); opacity:0; } }
+.ve-signal,.ve-card,.ve-panel,.ve-note,.ve-warn{ animation:veFadeUp .38s var(--ease) both; }
+.ve-grid .ve-card:nth-child(2){ animation-delay:.03s; }
+.ve-grid .ve-card:nth-child(3){ animation-delay:.06s; }
+.ve-grid .ve-card:nth-child(4){ animation-delay:.09s; }
+.ve-grid .ve-card:nth-child(5){ animation-delay:.12s; }
+.ve-grid .ve-card:nth-child(6){ animation-delay:.15s; }
+.ve-grid .ve-card:nth-child(7){ animation-delay:.18s; }
+.ve-grid .ve-card:nth-child(8){ animation-delay:.21s; }
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ animation:none !important; transition:none !important; }
+}
+
+/* ---- sidebar brand ---- */
+.ve-brand{ display:flex; align-items:center; gap:.65rem; }
+.ve-brand .logo{ width:34px; height:34px; border-radius:9px; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg,var(--indigo),var(--cyan));
+  color:#0a1120; font-weight:800; font-size:.78rem; letter-spacing:.02em; }
+.ve-brand .name{ font-size:1.0rem; font-weight:700; letter-spacing:-.02em; line-height:1.15; }
+.ve-brand .sub{ color:var(--muted); font-weight:500; font-size:.74rem; margin-top:.1rem; }
+
+/* ---- hero ---- */
+.ve-hero .kicker{ display:flex; align-items:center; gap:.55rem; color:var(--muted);
+  font-size:.72rem; font-weight:700; letter-spacing:.16em; text-transform:uppercase;
+  margin-bottom:.45rem; }
+.ve-hero .kicker::before{ content:""; width:20px; height:2px; border-radius:2px;
+  background:linear-gradient(90deg,var(--indigo),var(--cyan)); }
 .ve-hero h1{
-  font-size:clamp(1.45rem,4.5vw,2.25rem); font-weight:800; letter-spacing:-.03em; margin:0;
+  font-size:clamp(1.45rem,4.5vw,2.2rem); font-weight:800; letter-spacing:-.03em; margin:0;
   background:linear-gradient(90deg,#f1f5f9,#a5b4fc 55%,#67e8f9);
   -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
 }
-.ve-hero p{ color:var(--muted); margin:.3rem 0 0; font-size:clamp(.84rem,2.6vw,.97rem); }
+.ve-hero p{ color:var(--muted); margin:.35rem 0 0; font-size:clamp(.84rem,2.6vw,.95rem); }
 
+/* ---- section headings ---- */
 .ve-sec{ display:flex; align-items:baseline; gap:.55rem; margin:1.5rem 0 .65rem;
-  font-weight:700; font-size:1.04rem; letter-spacing:-.01em; color:#f1f5f9; }
-.ve-sec .dot{ align-self:center; width:9px; height:9px; border-radius:3px; flex:none;
-  background:linear-gradient(135deg,var(--indigo),var(--cyan));
-  box-shadow:0 0 12px rgba(129,140,248,.8); }
-.ve-sec .sub{ color:var(--muted); font-weight:500; font-size:.78rem; }
+  font-weight:700; font-size:1.02rem; letter-spacing:-.01em; color:#f1f5f9; }
+.ve-sec .dot{ align-self:center; width:8px; height:8px; border-radius:2.5px; flex:none;
+  background:linear-gradient(135deg,var(--indigo),var(--cyan)); }
+.ve-sec .sub{ color:var(--muted); font-weight:500; font-size:.76rem; white-space:nowrap; }
+.ve-sec::after{ content:""; flex:1; align-self:center; height:1px; margin-left:.35rem;
+  background:linear-gradient(90deg,var(--panel-border),transparent); }
 
+/* ---- signal hero card ---- */
 .ve-signal{ border-radius:var(--radius); border:1px solid; padding:1.05rem 1.2rem;
   margin:.35rem 0 .9rem; display:flex; flex-direction:column; gap:.55rem; }
 .ve-signal .sig-row{ display:flex; align-items:center; gap:.65rem; flex-wrap:wrap; }
-.ve-signal .sig-word{ font-size:clamp(1.25rem,5vw,1.65rem); font-weight:800; letter-spacing:.01em; }
-.ve-signal .sig-ticker{ font-family:'JetBrains Mono',monospace; font-weight:700; font-size:.92rem;
-  padding:.18rem .6rem; border-radius:999px; background:rgba(255,255,255,.08);
-  border:1px solid rgba(255,255,255,.16); }
-.ve-signal .sig-badge{ font-size:.72rem; font-weight:800; letter-spacing:.08em; padding:.22rem .6rem;
-  border-radius:999px; text-transform:uppercase; }
-.ve-signal .sig-badge.high{ color:#1c1303; background:linear-gradient(135deg,#fcd34d,#f59e0b);
-  box-shadow:0 0 18px rgba(245,158,11,.35); }
-.ve-signal .sig-badge.std{ color:#c7d2fe; background:rgba(129,140,248,.13);
+.ve-signal .sig-dot{ width:10px; height:10px; border-radius:50%; position:relative; flex:none; }
+.ve-signal .sig-dot::after{ content:""; position:absolute; inset:0; border-radius:50%;
+  background:inherit; animation:vePing 2.4s var(--ease) infinite; }
+.ve-signal .sig-word{ font-size:clamp(1.2rem,5vw,1.55rem); font-weight:800; letter-spacing:.02em; }
+.ve-signal .sig-ticker{ font-family:'JetBrains Mono',monospace; font-weight:700; font-size:.9rem;
+  padding:.18rem .6rem; border-radius:8px; background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.14); }
+.ve-signal .sig-badge{ font-size:.68rem; font-weight:700; letter-spacing:.09em; padding:.24rem .6rem;
+  border-radius:6px; text-transform:uppercase; }
+.ve-signal .sig-badge.high{ color:#fcd34d; background:rgba(251,191,36,.12);
+  border:1px solid rgba(251,191,36,.45); }
+.ve-signal .sig-badge.std{ color:#c7d2fe; background:rgba(129,140,248,.12);
   border:1px solid rgba(129,140,248,.4); }
-.ve-signal .sig-reason{ color:var(--muted); font-size:.91rem; line-height:1.45; }
-.ve-signal.recommend{ background:linear-gradient(135deg,rgba(52,211,153,.16),rgba(16,185,129,.04) 60%);
-  border-color:rgba(52,211,153,.42); box-shadow:0 0 44px rgba(16,185,129,.12); }
+.ve-signal .sig-reason{ color:var(--muted); font-size:.9rem; line-height:1.45; }
+.ve-signal.recommend{ background:linear-gradient(135deg,rgba(52,211,153,.13),rgba(16,185,129,.03) 60%);
+  border-color:rgba(52,211,153,.38); }
 .ve-signal.recommend .sig-word{ color:var(--green); }
-.ve-signal.consider{ background:linear-gradient(135deg,rgba(251,191,36,.15),rgba(245,158,11,.04) 60%);
-  border-color:rgba(251,191,36,.40); box-shadow:0 0 44px rgba(245,158,11,.10); }
+.ve-signal.recommend .sig-dot{ background:var(--green); }
+.ve-signal.consider{ background:linear-gradient(135deg,rgba(251,191,36,.12),rgba(245,158,11,.03) 60%);
+  border-color:rgba(251,191,36,.36); }
 .ve-signal.consider .sig-word{ color:var(--amber); }
-.ve-signal.avoid{ background:linear-gradient(135deg,rgba(248,113,113,.15),rgba(239,68,68,.04) 60%);
-  border-color:rgba(248,113,113,.40); box-shadow:0 0 44px rgba(239,68,68,.10); }
+.ve-signal.consider .sig-dot{ background:var(--amber); }
+.ve-signal.avoid{ background:linear-gradient(135deg,rgba(248,113,113,.12),rgba(239,68,68,.03) 60%);
+  border-color:rgba(248,113,113,.36); }
 .ve-signal.avoid .sig-word{ color:var(--red); }
+.ve-signal.avoid .sig-dot{ background:var(--red); }
 
+/* ---- gate pills ---- */
 .ve-pills{ display:flex; flex-wrap:wrap; gap:.4rem; }
-.ve-pill{ display:inline-flex; align-items:center; gap:.32rem; padding:.26rem .6rem;
-  font-size:.77rem; font-weight:600; border-radius:999px; border:1px solid; cursor:default; }
-.ve-pill.pass{ color:#86efac; background:rgba(34,197,94,.10); border-color:rgba(34,197,94,.35); }
-.ve-pill.fail{ color:#fca5a5; background:rgba(239,68,68,.10); border-color:rgba(239,68,68,.32); }
-.ve-pill.adv-pass{ color:#fcd34d; background:rgba(251,191,36,.10); border-color:rgba(251,191,36,.40); }
-.ve-pill.adv-fail{ color:var(--muted); background:rgba(148,163,184,.07); border-color:rgba(148,163,184,.25); }
+.ve-pill{ display:inline-flex; align-items:center; gap:.42rem; padding:.27rem .65rem;
+  font-size:.76rem; font-weight:600; border-radius:7px; border:1px solid; cursor:default;
+  transition:border-color .2s var(--ease), background .2s var(--ease); }
+.ve-pill .dot{ width:6px; height:6px; border-radius:50%; flex:none; }
+.ve-pill.pass{ color:#86efac; background:rgba(34,197,94,.08); border-color:rgba(34,197,94,.30); }
+.ve-pill.pass .dot{ background:var(--green); }
+.ve-pill.fail{ color:#fca5a5; background:rgba(239,68,68,.08); border-color:rgba(239,68,68,.28); }
+.ve-pill.fail .dot{ background:var(--red); }
+.ve-pill.adv-pass{ color:#fcd34d; background:rgba(251,191,36,.08); border-color:rgba(251,191,36,.34); }
+.ve-pill.adv-pass .dot{ background:var(--amber); }
+.ve-pill.adv-fail{ color:var(--muted); background:rgba(148,163,184,.05); border-color:rgba(148,163,184,.22); }
+.ve-pill.adv-fail .dot{ background:transparent; box-shadow:inset 0 0 0 1.5px var(--muted); }
+.ve-pill:hover{ border-color:var(--panel-border-hi); }
 
+/* ---- metric cards ---- */
 .ve-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(152px,1fr)); gap:.7rem; }
 .ve-card{ background:var(--panel); border:1px solid var(--panel-border);
-  border-radius:var(--radius); padding:.85rem .95rem; min-width:0; }
-.ve-card .k{ color:var(--muted); font-size:.72rem; font-weight:600;
-  text-transform:uppercase; letter-spacing:.07em; }
-.ve-card .v{ font-family:'JetBrains Mono',monospace; font-size:clamp(1.02rem,3vw,1.28rem);
-  font-weight:700; margin-top:.28rem; color:#f1f5f9; overflow-wrap:anywhere; }
+  border-radius:var(--radius); padding:.85rem .95rem; min-width:0;
+  transition:transform .22s var(--ease), border-color .22s var(--ease), background .22s var(--ease); }
+.ve-card:hover{ transform:translateY(-2px); border-color:var(--panel-border-hi);
+  background:rgba(148,163,184,.08); }
+.ve-card .k{ color:var(--muted); font-size:.71rem; font-weight:600;
+  text-transform:uppercase; letter-spacing:.08em; }
+.ve-card .v{ font-family:'JetBrains Mono',monospace; font-size:clamp(1.02rem,3vw,1.26rem);
+  font-weight:700; margin-top:.3rem; color:#f1f5f9; overflow-wrap:anywhere;
+  font-variant-numeric:tabular-nums; }
 .ve-card .v.good{ color:var(--green); } .ve-card .v.bad{ color:var(--red); }
 .ve-card .v.warn{ color:var(--amber); } .ve-card .v.accent{ color:var(--indigo); }
-.ve-card .s{ color:var(--muted); font-size:.73rem; margin-top:.22rem; line-height:1.35; }
+.ve-card .s{ color:var(--muted); font-size:.73rem; margin-top:.24rem; line-height:1.35; }
 
+/* ---- panels & key-value rows ---- */
 .ve-panel{ background:var(--panel); border:1px solid var(--panel-border);
-  border-radius:var(--radius); padding:1rem 1.1rem; }
+  border-radius:var(--radius); padding:1rem 1.1rem;
+  transition:border-color .22s var(--ease); }
+.ve-panel:hover{ border-color:var(--panel-border-hi); }
 .ve-rows{ display:flex; flex-direction:column; gap:.55rem; }
 .ve-row{ display:flex; justify-content:space-between; align-items:baseline; gap:1rem;
-  border-bottom:1px dashed rgba(148,163,184,.13); padding-bottom:.5rem; }
+  border-bottom:1px dashed rgba(148,163,184,.12); padding-bottom:.5rem; }
 .ve-row:last-child{ border-bottom:none; padding-bottom:0; }
 .ve-row .l{ color:var(--muted); font-size:.84rem; }
 .ve-row .r{ font-family:'JetBrains Mono',monospace; font-weight:700; font-size:.92rem;
-  text-align:right; color:#f1f5f9; }
+  text-align:right; color:#f1f5f9; font-variant-numeric:tabular-nums; }
 .ve-row .r.good{ color:var(--green); } .ve-row .r.bad{ color:var(--red); }
 .ve-row .r.warn{ color:var(--amber); }
 
+/* ---- tables ---- */
 table.ve-table{ width:100%; border-collapse:separate; border-spacing:0; font-size:.88rem; }
-table.ve-table th{ text-align:left; color:var(--muted); font-size:.71rem; text-transform:uppercase;
-  letter-spacing:.07em; padding:.45rem .7rem; border-bottom:1px solid var(--panel-border); }
-table.ve-table td{ padding:.62rem .7rem; border-bottom:1px solid rgba(148,163,184,.08);
-  color:#e2e8f0; }
+table.ve-table th{ text-align:left; color:var(--muted); font-size:.7rem; text-transform:uppercase;
+  letter-spacing:.08em; padding:.45rem .7rem; border-bottom:1px solid var(--panel-border); }
+table.ve-table td{ padding:.62rem .7rem; border-bottom:1px solid rgba(148,163,184,.07);
+  color:#e2e8f0; transition:background .15s var(--ease); }
 table.ve-table tr:last-child td{ border-bottom:none; }
-table.ve-table td.mono{ font-family:'JetBrains Mono',monospace; font-weight:600; }
-.act{ font-weight:700; padding:.13rem .55rem; border-radius:8px; font-size:.77rem;
-  display:inline-block; }
-.act.sell{ color:#fda4af; background:rgba(244,63,94,.12); border:1px solid rgba(244,63,94,.32); }
-.act.buy{ color:#86efac; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.32); }
+table.ve-table tbody tr:hover td{ background:rgba(148,163,184,.045); }
+table.ve-table td.mono{ font-family:'JetBrains Mono',monospace; font-weight:600;
+  font-variant-numeric:tabular-nums; }
+.act{ font-weight:700; padding:.13rem .55rem; border-radius:6px; font-size:.76rem;
+  display:inline-block; letter-spacing:.03em; }
+.act.sell{ color:#fda4af; background:rgba(244,63,94,.10); border:1px solid rgba(244,63,94,.30); }
+.act.buy{ color:#86efac; background:rgba(34,197,94,.10); border:1px solid rgba(34,197,94,.30); }
 
-.ve-warn{ border-radius:12px; padding:.75rem 1rem; margin-top:.7rem; font-size:.88rem;
-  background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.35); color:#fde68a; }
-.ve-note{ border-radius:12px; padding:.75rem 1rem; font-size:.88rem; line-height:1.5;
-  background:rgba(129,140,248,.07); border:1px solid rgba(129,140,248,.3); color:#c7d2fe; }
+/* ---- callouts ---- */
+.ve-warn{ border-radius:10px; padding:.8rem 1rem; margin-top:.7rem; font-size:.88rem;
+  background:rgba(251,191,36,.07); border:1px solid rgba(251,191,36,.30);
+  border-left:3px solid var(--amber); color:#fde68a; }
+.ve-note{ border-radius:10px; padding:.8rem 1rem; font-size:.88rem; line-height:1.5;
+  background:rgba(129,140,248,.06); border:1px solid rgba(129,140,248,.28);
+  border-left:3px solid var(--indigo); color:#c7d2fe; }
 
+/* ---- streamlit chrome ---- */
 [data-testid="stExpander"]{ border-radius:var(--radius); overflow:hidden; }
 [data-testid="stExpander"] details{ background:var(--panel); border:1px solid var(--panel-border);
-  border-radius:var(--radius); }
-[data-testid="stTabs"] button p{ font-weight:600; font-size:.93rem; }
-.stButton button{ border-radius:12px; font-weight:700; }
-.ve-foot{ color:var(--muted); font-size:.78rem; margin-top:2.2rem; text-align:center;
-  border-top:1px solid var(--panel-border); padding-top:1rem; }
+  border-radius:var(--radius); transition:border-color .22s var(--ease); }
+[data-testid="stExpander"] details:hover{ border-color:var(--panel-border-hi); }
+[data-testid="stTabs"] button p{ font-weight:600; font-size:.9rem; }
+.stButton button{ border-radius:10px; font-weight:600; letter-spacing:.01em;
+  transition:transform .18s var(--ease), box-shadow .18s var(--ease),
+             border-color .18s var(--ease), background .18s var(--ease); }
+.stButton button:hover{ transform:translateY(-1px); box-shadow:0 6px 20px rgba(99,102,241,.22); }
+.stButton button:active{ transform:translateY(0); box-shadow:none; }
+.ve-foot{ color:var(--muted); font-size:.77rem; margin-top:2.2rem; text-align:center;
+  border-top:1px solid var(--panel-border); padding-top:1rem; letter-spacing:.01em; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -254,8 +323,9 @@ def _seed_from_ibkr(data: dict):
 # Sidebar — global inputs (PRD 8)
 # ==================================================================
 st.sidebar.markdown(
-    '<div class="ve-brand">📉 Volatility Engine'
-    '<div class="sub">Earnings IV-Crush · Long Calendars · PRD v3.1</div></div>',
+    '<div class="ve-brand"><span class="logo">VE</span>'
+    '<div><div class="name">Volatility Engine</div>'
+    '<div class="sub">Earnings IV-Crush · Long Calendars · PRD v3.1</div></div></div>',
     unsafe_allow_html=True,
 )
 st.sidebar.divider()
@@ -276,14 +346,14 @@ def _yf_fetch(symbol: str) -> dict:
 
 
 if source == "Manual / Demo":
-    st.sidebar.button("🎯 Load demo ticker", on_click=_seed_demo, width="stretch", type="primary")
+    st.sidebar.button("Load demo ticker", on_click=_seed_demo, width="stretch", type="primary")
 elif source.startswith("Yahoo"):
-    with st.sidebar.expander("🌐 Yahoo Finance", expanded=True):
+    with st.sidebar.expander("Yahoo Finance", expanded=True):
         st.caption("Free & keyless · ~15-min delayed quotes · real earnings dates. "
                    "IV-percentile history uses a realized-vol proxy (see README).")
         yf_symbol = st.text_input("Symbol to fetch", value=_get("ticker", "AAPL"),
                                   key="yf_symbol").upper()
-        if st.button("📡 Fetch from Yahoo", width="stretch", type="primary"):
+        if st.button("Fetch from Yahoo", width="stretch", type="primary"):
             try:
                 with st.spinner(f"Fetching {yf_symbol} from Yahoo..."):
                     data = _yf_fetch(yf_symbol)
@@ -300,7 +370,7 @@ elif source.startswith("Yahoo"):
                 st.error(f"Yahoo fetch failed: {e}")
                 st.caption("Yahoo rate-limits busy IPs — wait a minute and retry.")
 else:
-    with st.sidebar.expander("🔌 IBKR connection", expanded=True):
+    with st.sidebar.expander("IBKR connection", expanded=True):
         ib_symbol = st.text_input("Symbol to fetch", value=_get("ticker", "AAPL")).upper()
         ib_host = st.text_input("Host", value="127.0.0.1")
         ib_port = st.number_input(
@@ -311,7 +381,7 @@ else:
             "Market data type", options=[(3, "Delayed"), (1, "Live"), (4, "Delayed-frozen")],
             format_func=lambda o: o[1], index=0,
         )[0]
-        if st.button("📡 Fetch live data", width="stretch", type="primary"):
+        if st.button("Fetch live data", width="stretch", type="primary"):
             try:
                 from data_provider import fetch_ibkr_metrics
                 with st.spinner(f"Connecting to IBKR and pulling {ib_symbol}..."):
@@ -340,7 +410,7 @@ spot = st.sidebar.number_input(
     "Current Spot Price ($)", min_value=0.0, value=float(_get("spot", 150.0)), step=0.5
 )
 
-with st.sidebar.expander("🎚️ Signal thresholds", expanded=False):
+with st.sidebar.expander("Signal thresholds", expanded=False):
     vol_threshold = st.number_input("Min 30d Avg Volume", min_value=0, value=1_000_000, step=100_000)
     iv_rv_threshold = st.number_input("Min IV/RV Ratio", min_value=0.0, value=1.2, step=0.05)
     drift_threshold = st.number_input(
@@ -355,7 +425,8 @@ st.sidebar.caption("Educational tool — not investment advice.")
 # Hero
 # ==================================================================
 st.markdown(
-    '<div class="ve-hero"><h1>Earnings IV-Crush Engine</h1>'
+    '<div class="ve-hero"><div class="kicker">Volatility Engine</div>'
+    '<h1>Earnings IV-Crush Engine</h1>'
     '<p>Long Calendar Spread detection · deterministic signal routing · '
     '10% Kelly sizing under a hard 6% debit cap</p></div>',
     unsafe_allow_html=True,
@@ -364,7 +435,7 @@ st.markdown(
 # ==================================================================
 # Market inputs (pulled from a data provider in production)
 # ==================================================================
-with st.expander("📥 Options-chain & volatility inputs", expanded=False):
+with st.expander("Options-chain & volatility inputs", expanded=False):
     c1, c2, c3 = st.columns(3)
     with c1:
         iv_near = st.number_input("IV — near term (front week)", min_value=0.0,
@@ -415,23 +486,27 @@ signal = result["signal"]
 # ==================================================================
 badge = ""
 if result["conviction"] == "High":
-    badge = '<span class="sig-badge high">★ High conviction</span>'
+    badge = '<span class="sig-badge high">High conviction</span>'
 elif result["conviction"] == "Standard":
     badge = '<span class="sig-badge std">Standard</span>'
 
 pills = []
 for c in result["checks"]:
     if c["required"]:
-        cls, icon = ("pass", "✓") if c["passed"] else ("fail", "✗")
+        cls = "pass" if c["passed"] else "fail"
     else:
-        cls, icon = ("adv-pass", "★") if c["passed"] else ("adv-fail", "·")
-    pills.append(f'<span class="ve-pill {cls}" title="{c["detail"]}">{icon} {c["label"]}</span>')
+        cls = "adv-pass" if c["passed"] else "adv-fail"
+    pills.append(
+        f'<span class="ve-pill {cls}" title="{html.escape(c["detail"], quote=True)}">'
+        f'<span class="dot"></span>{html.escape(c["label"])}</span>'
+    )
 
 st.markdown(
     f'<div class="ve-signal {signal.lower()}">'
-    f'<div class="sig-row"><span class="sig-word">{signal.upper()}</span>'
-    f'<span class="sig-ticker">{ticker}</span>{badge}</div>'
-    f'<div class="sig-reason">{result["reason"]}</div>'
+    f'<div class="sig-row"><span class="sig-dot"></span>'
+    f'<span class="sig-word">{signal.upper()}</span>'
+    f'<span class="sig-ticker">{html.escape(ticker)}</span>{badge}</div>'
+    f'<div class="sig-reason">{html.escape(result["reason"])}</div>'
     f'<div class="ve-pills">{"".join(pills)}</div>'
     f'</div>',
     unsafe_allow_html=True,
@@ -464,7 +539,7 @@ cards_grid([
                 "good" if m["avg_30day_volume"] > vol_threshold else "bad"),
 ])
 
-with st.expander("📋 Metrics table view"):
+with st.expander("Metrics table view"):
     st.dataframe(pd.DataFrame({
         "Metric": [
             "Term Structure Slope (IV_near − IV_45)", "IV / RV Ratio",
@@ -476,7 +551,7 @@ with st.expander("📋 Metrics table view"):
             f"{slope:+.4f}", f"{m['iv_rv_ratio']:.2f}", f"{m['iv_percentile']:.1f}%",
             f"${m['expected_move_dollars']:.2f}", f"{m['expected_move_pct']:.2%}",
             f"{m['historical_move_mean']:.2%}",
-            "✅ Yes" if m["magnitude_premium_detected"] else "❌ No",
+            "Yes" if m["magnitude_premium_detected"] else "No",
             f"{m['avg_30day_volume']:,}",
         ],
     }), hide_index=True, width="stretch")
@@ -543,7 +618,7 @@ cards_grid([
                 "win rate · avg win · avg loss (72.5k events)"),
 ])
 st.markdown(
-    f'<div class="ve-warn">⚠️ Never exceed <b>${max_debit:,.2f}</b> of total debit on this '
+    f'<div class="ve-warn">Never exceed <b>${max_debit:,.2f}</b> of total debit on this '
     f'trade ({MAX_PORTFOLIO_FRACTION:.0%} of portfolio). The applied-Kelly suggestion '
     f'(~{kelly["fractional_kelly"]:.2%}) is the smoother-equity default.</div>',
     unsafe_allow_html=True,
@@ -643,7 +718,7 @@ else:
     st.markdown(
         f'<div class="ve-note">Trade legs are only generated for <b>RECOMMEND</b> signals '
         f'(current: <b>{signal.upper()}</b>). Adjust the inputs or thresholds — the failed '
-        f'gates are marked ✗ in the banner above.</div>',
+        f'gates are highlighted red in the banner above.</div>',
         unsafe_allow_html=True,
     )
 
@@ -669,7 +744,7 @@ def cached_mc(capital: float, win_rate: float, avg_win: float, avg_loss: float,
     )
 
 
-tab_bt, tab_mc, tab_scan = st.tabs(["📜 Backtest", "🎲 Monte Carlo", "🔎 Scanner"])
+tab_bt, tab_mc, tab_scan = st.tabs(["Backtest", "Monte Carlo", "Scanner"])
 
 REAL_EVENT_COLS = ["iv_near", "iv_far", "iv_near_post", "iv_far_post", "realized_move"]
 
@@ -680,7 +755,7 @@ with tab_bt:
     bc1, bc2 = st.columns(2)
     bt_events = bc1.slider("Earnings events", 200, 5000, 2000, step=100)
     bt_per_year = bc2.slider("Trades / year (CAGR & Sharpe)", 10, 100, 50, step=5)
-    with st.expander("📤 Use real earnings events (CSV) instead of the synthetic universe"):
+    with st.expander("Use real earnings events (CSV) instead of the synthetic universe"):
         st.caption("Columns: `" + "`, `".join(REAL_EVENT_COLS) + "` — IVs as decimals "
                    "(0.85 = 85%), `realized_move` as a signed fraction (0.04 = +4%).")
         events_file = st.file_uploader("Events CSV", type=["csv"], label_visibility="collapsed")
@@ -822,7 +897,7 @@ with tab_scan:
         value="AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, AMD",
         height=70,
     )
-    if st.button("🔎 Scan watchlist", type="primary"):
+    if st.button("Scan watchlist", type="primary"):
         syms = sorted({s.strip().upper() for s in re.split(r"[,\s]+", watch) if s.strip()})
         rows, errors = [], []
         prog = st.progress(0.0, text="Scanning…")
@@ -838,12 +913,10 @@ with tab_scan:
                     vol_threshold=int(vol_threshold), iv_rv_threshold=float(iv_rv_threshold),
                 )
                 mm = r["metrics"]
-                emoji = {"Recommend": "🟢", "Consider": "🟡", "Avoid": "🔴"}[r["signal"]]
                 rows.append({
                     "Ticker": sym,
-                    "Signal": f"{emoji} {r['signal']}",
-                    "Conviction": "★ High" if r["conviction"] == "High"
-                                  else (r["conviction"] or "—"),
+                    "Signal": r["signal"],
+                    "Conviction": r["conviction"] or "—",
                     "Slope": round(mm["term_structure_slope"], 3),
                     "IV/RV": round(mm["iv_rv_ratio"], 2),
                     "IV %ile": round(mm["iv_percentile"]),
@@ -855,8 +928,8 @@ with tab_scan:
                 errors.append(f"{sym}: {e}")
             prog.progress((i + 1) / len(syms), text=f"Scanned {sym} ({i + 1}/{len(syms)})")
         prog.empty()
-        sig_rank = {"🟢 Recommend": 0, "🟡 Consider": 1, "🔴 Avoid": 2}
-        conv_rank = {"★ High": 0, "Standard": 1, "—": 2}
+        sig_rank = {"Recommend": 0, "Consider": 1, "Avoid": 2}
+        conv_rank = {"High": 0, "Standard": 1, "—": 2}
         rows.sort(key=lambda x: (sig_rank[x["Signal"]],
                                  conv_rank.get(x["Conviction"], 2), -x["IV %ile"]))
         st.session_state["scan_rows"] = rows
@@ -875,7 +948,7 @@ with tab_scan:
             st.session_state["flash"] = f"Loaded {pick} from the scan."
             st.rerun()
     for err in st.session_state.get("scan_errors", []):
-        st.caption(f"⚠️ {err}")
+        st.caption(err)
 
 st.markdown(
     '<div class="ve-foot">Volatility Engine · educational tool — not investment advice. '

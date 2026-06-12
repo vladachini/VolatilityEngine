@@ -1,4 +1,4 @@
-# 📉 Volatility Engine — Earnings IV-Crush Trading App
+# Volatility Engine — Earnings IV-Crush Trading App
 
 Detects, structures, and sizes earnings-based **Long Calendar Spread** options trades by
 capitalizing on implied-volatility crush. Implements **PRD v3.1** with a dark,
@@ -16,7 +16,7 @@ mobile-responsive Streamlit dashboard.
 
 ---
 
-## 🚀 Quick start (step by step)
+## Quick start (step by step)
 
 **Prerequisites:** Python **3.10+** (3.11 recommended) and `pip`. Nothing else is needed
 for demo mode — live data via IBKR is optional (see below).
@@ -38,11 +38,11 @@ streamlit run app.py
 ```
 
 The app opens at **http://localhost:8501**. On first load it's already evaluating a
-clean *Recommend* setup — press **🎯 Load demo ticker** in the sidebar at any time to
+clean *Recommend* setup — press **Load demo ticker** in the sidebar at any time to
 reset to it. The backtest and Monte Carlo panels compute live; drag their sliders and
 everything re-derives instantly.
 
-**📱 Mobile:** the layout is fully responsive — cards reflow, charts resize, and the
+**Mobile:** the layout is fully responsive — cards reflow, charts resize, and the
 sidebar collapses behind the `»` toggle (top-left). To open it from your phone on the
 same network: `streamlit run app.py --server.address 0.0.0.0`, then browse to
 `http://<your-computer-ip>:8501`.
@@ -56,7 +56,7 @@ python backtest.py             # prints derived win rate, Kelly, CAGR, Sharpe...
 
 ---
 
-## 🧠 The strategy (PRD v3.1)
+## The strategy (PRD v3.1)
 
 Ahead of earnings, front-week implied volatility is systematically bid up. A **long
 calendar spread** (sell the front-week ATM option, buy the same strike ~30 days out)
@@ -66,9 +66,9 @@ harvests the collapse ("IV crush") of that front-week premium after the announce
 
 | Signal | Condition |
 |---|---|
-| 🟢 **Recommend** | Backwardation **and** ADV > 1M **and** IV/RV > 1.2 **and** IV percentile ≥ 70% |
-| 🟡 **Consider** | Backwardation, but ≥ 1 other gate fails |
-| 🔴 **Avoid** | No backwardation (`Slope = IV_near − IV_45 ≤ 0`) — the edge does not exist |
+| **Recommend** | Backwardation **and** ADV > 1M **and** IV/RV > 1.2 **and** IV percentile ≥ 70% |
+| **Consider** | Backwardation, but ≥ 1 other gate fails |
+| **Avoid** | No backwardation (`Slope = IV_near − IV_45 ≤ 0`) — the edge does not exist |
 
 > Sign convention: backwardation = **elevated front-week IV**, i.e. `Slope > 0`.
 > (The PRD prose called this "negative slope" — a labeling error; the math here is verified.)
@@ -78,7 +78,7 @@ harvests the collapse ("IV crush") of that front-week premium after the announce
 - **IV percentile (6.1)** — current IV vs a 252-day window; ≥ 70% required.
 - **Expected Move (6.2)** — `EM ≈ 0.85 × (ATM call + ATM put)`, shown in $ and % of spot.
 - **Magnitude premium (6.3)** — `EM% > 1.25 × mean historical earnings move%` upgrades a
-  Recommend to **★ High conviction**. *(Fixed: this comparison is now done in
+  Recommend to **High conviction**. *(Fixed: this comparison is now done in
   like-for-like units — % of spot — instead of dollars vs fractions.)*
 - **Strike tilt (6.4)** — when |mean quarterly drift| > 1% (configurable), the strike is
   shifted ±0.5×EM in the drift direction to cheapen the debit.
@@ -107,16 +107,16 @@ earnings data instead of the synthetic universe.
 
 ---
 
-## 🌐 Live data — two options
+## Live data — two options
 
 ### Option A: Yahoo Finance (free — no account, no API key)
 
 Works out of the box: sidebar → *Data source → Yahoo (yfinance)* → enter a symbol →
-**📡 Fetch from Yahoo**. Spot, ATM IVs (near / interpolated 30d / ~45d), realized vol,
+**Fetch from Yahoo**. Spot, ATM IVs (near / interpolated 30d / ~45d), realized vol,
 ADV, the front-week straddle, **real past earnings reactions and the next earnings
 date** all populate automatically.
 
-The **🔎 Scanner** tab scans a whole watchlist through Yahoo and ranks tickers by
+The **Scanner** tab scans a whole watchlist through Yahoo and ranks tickers by
 signal → conviction → IV percentile, with one-click loading into the engine.
 
 Honest limitations (also in `data_provider_yf.py`):
@@ -135,7 +135,7 @@ The app can pull live/delayed data straight from IBKR with `ib_insync`.
 3. Socket ports: TWS `7497` (paper) / `7496` (live); Gateway `4002` / `4001`.
 4. Without an OPRA options subscription, use **Delayed** market data (the app's default).
 
-**In the app:** sidebar → *Data source → IBKR (ib_insync)* → set host/port → **📡 Fetch
+**In the app:** sidebar → *Data source → IBKR (ib_insync)* → set host/port → **Fetch
 live data**. The fetched IV term structure, IV/RV, ADV, ATM straddle, and IV history
 populate the inputs and the engine re-evaluates automatically.
 
@@ -158,7 +158,7 @@ server and point host/port at it. Nothing assumes a GUI.
 
 ---
 
-## ☁️ Deploying (free, shareable URL)
+## Deploying (free, shareable URL)
 
 [Streamlit Community Cloud](https://share.streamlit.io): point it at this repo,
 `app.py` as the entrypoint — the included `.streamlit/config.toml` carries the dark
@@ -167,7 +167,7 @@ on a reachable host; demo/manual mode needs nothing.)
 
 ---
 
-## ⚠️ Notes
+## Notes
 
 - The 6% cap and the ~3.24% applied Kelly differ **by design** (PRD §5): Kelly is the
   suggestion, 6% is the never-exceed ceiling. The UI shows both, in dollars and contracts.
