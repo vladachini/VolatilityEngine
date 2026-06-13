@@ -9,6 +9,7 @@ protocols, and live backtest + Monte Carlo validation.
 Run:  streamlit run app.py
 """
 import html
+import os
 import re
 
 import numpy as np
@@ -29,6 +30,7 @@ from engine import (
     bs_call,
 )
 from backtest import BacktestConfig, run_backtest
+from data_provider_finnhub import entry_label, entry_session, upcoming_window
 from demo import DEFAULT_HIST_MOVES, DEMO, demo_iv_history
 
 st.set_page_config(
@@ -319,6 +321,30 @@ def _seed_from_ibkr(data: dict):
         st.session_state["hist_moves"] = data["hist_moves"]
 
 
+def _default_finnhub_key() -> str:
+    """Finnhub key from st.secrets, then the FINNHUB_API_KEY env var."""
+    try:
+        secret = st.secrets.get("FINNHUB_API_KEY", "")
+    except Exception:
+        secret = ""
+    return secret or os.environ.get("FINNHUB_API_KEY", "")
+
+
+def _evaluate_symbol(symbol: str, vol_thr: int, iv_rv_thr: float):
+    """Fetch one symbol from Yahoo and run it through the engine (shared by the
+    Scanner and Upcoming Earnings tabs). Returns (raw_data, engine_result)."""
+    d = _yf_fetch(symbol)
+    r = VolatilityEngine.evaluate_ticker(
+        iv_near=d["iv_near"], iv_45=d["iv_45"], iv_30=d["iv_30"],
+        rv_30=d["rv_30"], avg_30day_volume=int(d["volume"]),
+        historical_iv_series=pd.Series(d["historical_iv_series"]),
+        atm_call_price=d["atm_call"], atm_put_price=d["atm_put"],
+        historical_moves=d["hist_moves"], spot_price=float(d["spot"]),
+        vol_threshold=int(vol_thr), iv_rv_threshold=float(iv_rv_thr),
+    )
+    return d, r
+
+
 # ==================================================================
 # Sidebar — global inputs (PRD 8)
 # ==================================================================
@@ -400,6 +426,12 @@ else:
             except Exception as e:
                 st.error(f"IBKR fetch failed: {e}")
                 st.caption("Is TWS/IB Gateway running with the API enabled on this port?")
+
+with st.sidebar.expander("Earnings calendar key (Finnhub)", expanded=False):
+    st.caption("Free key from finnhub.io/register — powers the Upcoming Earnings tab. "
+               "Leave blank to use the FINNHUB_API_KEY env var / secret.")
+    finnhub_key = st.text_input("Finnhub API key", value=_default_finnhub_key(),
+                                type="password", label_visibility="collapsed")
 
 ticker = st.sidebar.text_input("Ticker Symbol", value=_get("ticker", "AAPL")).upper()
 portfolio = st.sidebar.number_input(
@@ -725,7 +757,14 @@ else:
 # ==================================================================
 # Validation — backtest + Monte Carlo (PRD 5 & 7), recomputed live
 # ==================================================================
-section("Strategy validation", "backtest-derived edge · Monte Carlo risk · PRD §5 + §7")
+section("Screening & validation",
+        "earnings calendar · watchlist scan · backtest-derived edge · Monte Carlo · PRD §5 + §7")
+
+
+@st.cache_data(show_spinner=False, ttl=900)
+def _finnhub_cal(from_date: str, to_date: str, key: str) -> list:
+    from data_provider_finnhub import fetch_earnings_calendar
+    return fetch_earnings_calendar(from_date, to_date, key)
 
 
 @st.cache_data(show_spinner=False)
@@ -744,9 +783,95 @@ def cached_mc(capital: float, win_rate: float, avg_win: float, avg_loss: float,
     )
 
 
-tab_bt, tab_mc, tab_scan = st.tabs(["Backtest", "Monte Carlo", "Scanner"])
+tab_earn, tab_scan, tab_bt, tab_mc = st.tabs(
+    ["Upcoming Earnings", "Scanner", "Backtest", "Monte Carlo"])
 
 REAL_EVENT_COLS = ["iv_near", "iv_far", "iv_near_post", "iv_far_post", "realized_move"]
+
+SIG_RANK = {"Recommend": 0, "Consider": 1, "Avoid": 2}
+CONV_RANK = {"High": 0, "Standard": 1, "—": 2}
+
+with tab_earn:
+    st.caption("Pulls the upcoming **earnings calendar** from Finnhub (free key), runs each "
+               "reporting name through the engine on Yahoo data, and ranks the setups — with "
+               "the session you'd enter the calendar (**AMC** reports → that afternoon; "
+               "**BMO** → the prior close). Sidebar thresholds apply.")
+    if not finnhub_key:
+        st.markdown('<div class="ve-note">Add a free Finnhub API key in the sidebar '
+                    '(<b>Earnings calendar key</b>) to enable this tab — register at '
+                    'finnhub.io/register.</div>', unsafe_allow_html=True)
+    e1, e2, e3 = st.columns(3)
+    days_ahead = e1.slider("Days ahead", 1, 14, 7)
+    max_names = e2.slider("Max names to evaluate", 5, 60, 25, step=5,
+                          help="Each name is a Yahoo fetch — higher is slower and more "
+                               "rate-limit prone. Soonest-to-report are evaluated first.")
+    min_adv_m = e3.number_input("Min ADV (M shares)", min_value=0.0, value=1.0, step=0.5)
+
+    if st.button("Fetch upcoming earnings", type="primary", disabled=not finnhub_key):
+        try:
+            frm, to = upcoming_window(int(days_ahead))
+            with st.spinner(f"Fetching earnings calendar {frm} → {to}…"):
+                cal = _finnhub_cal(frm, to, finnhub_key)
+            seen, agenda = set(), []
+            for row in cal:  # one row per symbol = its soonest upcoming report
+                if row["symbol"] not in seen:
+                    seen.add(row["symbol"])
+                    agenda.append(row)
+            agenda = agenda[: int(max_names)]
+            rows, errors = [], []
+            prog = st.progress(0.0, text="Evaluating…")
+            for i, row in enumerate(agenda):
+                sym = row["symbol"]
+                try:
+                    d, r = _evaluate_symbol(sym, vol_threshold, iv_rv_threshold)
+                    mm = r["metrics"]
+                    adv_m = mm["avg_30day_volume"] / 1e6
+                    if adv_m < float(min_adv_m):
+                        continue
+                    entry, _react = entry_session(row["date"], row["hour"])
+                    rows.append({
+                        "Ticker": sym,
+                        "Entry": entry_label(entry, row["hour"]),
+                        "_entry_iso": entry.date().isoformat(),
+                        "Earnings": row["date"],
+                        "Signal": r["signal"],
+                        "Conviction": r["conviction"] or "—",
+                        "Slope": round(mm["term_structure_slope"], 3),
+                        "IV/RV": round(mm["iv_rv_ratio"], 2),
+                        "IV %ile": round(mm["iv_percentile"]),
+                        "EM %": round(mm["expected_move_pct"] * 100, 1),
+                        "ADV (M)": round(adv_m, 1),
+                    })
+                except Exception as e:
+                    errors.append(f"{sym}: {e}")
+                prog.progress((i + 1) / len(agenda), text=f"Evaluated {sym} ({i + 1}/{len(agenda)})")
+            prog.empty()
+            rows.sort(key=lambda x: (SIG_RANK[x["Signal"]], CONV_RANK.get(x["Conviction"], 2),
+                                     x["_entry_iso"], -x["IV %ile"]))
+            st.session_state["earn_rows"] = rows
+            st.session_state["earn_errors"] = errors
+            if not rows and not errors:
+                st.warning("No reporting names cleared the ADV filter in that window.")
+        except Exception as e:
+            st.error(f"Earnings calendar fetch failed: {e}")
+            st.caption("Check the Finnhub key, or that the free-tier rate limit (60/min) "
+                       "isn't exhausted.")
+
+    if st.session_state.get("earn_rows"):
+        show = [{k: v for k, v in r.items() if not k.startswith("_")}
+                for r in st.session_state["earn_rows"]]
+        st.dataframe(pd.DataFrame(show), hide_index=True, width="stretch")
+        ecols = st.columns([3, 2])
+        epick = ecols[0].selectbox(
+            "Load a candidate into the engine",
+            [r["Ticker"] for r in st.session_state["earn_rows"]], key="earn_pick",
+        )
+        if ecols[1].button(f"Load {epick} into inputs", width="stretch", key="earn_load"):
+            _seed_from_ibkr(_yf_fetch(epick))
+            st.session_state["flash"] = f"Loaded {epick} from the earnings calendar."
+            st.rerun()
+    for err in st.session_state.get("earn_errors", []):
+        st.caption(err)
 
 with tab_bt:
     st.caption("Prices an ATM calendar through each earnings event with Black-Scholes to "
@@ -831,9 +956,10 @@ with tab_bt:
         show_chart(fig, height=240)
 
 with tab_mc:
-    st.caption("500 trades × 1,000 paths under fractional sizing (PRD §7). Fan shows the "
-               "5th / 50th / 95th percentile equity curves; Risk of Ruin = probability of a "
-               "≥50% peak-to-trough drawdown. Updates live.")
+    st.caption("Each trade risks a fixed fraction of *current* equity, so capital "
+               "**compounds geometrically** (exponential growth). The fan shows the "
+               "5th / 50th / 95th percentile of equity across all paths; Risk of Ruin = "
+               "probability of a ≥50% peak-to-trough drawdown. Updates live.")
     mcc1, mcc2, mcc3 = st.columns(3)
     n_trades = mcc1.slider("Trades per path", 50, 1000, 500, step=50)
     n_paths = mcc2.slider("Parallel paths", 100, 5000, 1000, step=100)
@@ -843,7 +969,14 @@ with tab_mc:
     }
     sizing_choice = mcc3.radio("Sizing per trade", list(sizing_options), horizontal=True)
     sizing = sizing_options[sizing_choice]
-    use_bt = st.checkbox("Use backtest-derived win/loss stats (else PRD constants)", value=True)
+    opt1, opt2 = st.columns(2)
+    use_bt = opt1.checkbox("Use backtest-derived win/loss stats (else PRD constants)", value=True)
+    y_scale = opt2.radio(
+        "Equity axis", ["Log", "Linear"], horizontal=True,
+        help="Compounding is exponential: a straight line on a log axis (equal % steps), "
+             "and an upward-curving sweep on a linear axis.",
+    )
+    is_log = y_scale == "Log"
     if use_bt:
         stats = dict(win_rate=bt["win_rate"], avg_win=bt["avg_win"], avg_loss=bt["avg_loss"])
     else:
@@ -867,10 +1000,11 @@ with tab_mc:
     fig.add_hline(y=float(portfolio), line_dash="dash", line_color="rgba(148,163,184,.45)",
                   annotation_text="start", annotation_font_color=MUTED)
     fig.update_layout(**base_layout(
-        xaxis_title="trade #", yaxis_type="log", yaxis_tickprefix="$", showlegend=True,
+        xaxis_title="trade #", yaxis_type="log" if is_log else "linear",
+        yaxis_tickprefix="$", showlegend=True,
         legend=dict(orientation="h", y=1.02, yanchor="bottom", x=1, xanchor="right",
                     bgcolor="rgba(0,0,0,0)"),
-        title=dict(text=f"Equity fan (log) — {sizing:.2%} sizing · "
+        title=dict(text=f"Equity fan ({y_scale.lower()}) — {sizing:.2%} sizing · "
                         f"p {stats['win_rate']:.0%} · +{stats['avg_win']:.0%} / "
                         f"−{stats['avg_loss']:.0%}",
                    font=dict(size=12, color="#cbd5e1"), x=0),
@@ -903,15 +1037,7 @@ with tab_scan:
         prog = st.progress(0.0, text="Scanning…")
         for i, sym in enumerate(syms):
             try:
-                d = _yf_fetch(sym)
-                r = VolatilityEngine.evaluate_ticker(
-                    iv_near=d["iv_near"], iv_45=d["iv_45"], iv_30=d["iv_30"],
-                    rv_30=d["rv_30"], avg_30day_volume=int(d["volume"]),
-                    historical_iv_series=pd.Series(d["historical_iv_series"]),
-                    atm_call_price=d["atm_call"], atm_put_price=d["atm_put"],
-                    historical_moves=d["hist_moves"], spot_price=float(d["spot"]),
-                    vol_threshold=int(vol_threshold), iv_rv_threshold=float(iv_rv_threshold),
-                )
+                d, r = _evaluate_symbol(sym, vol_threshold, iv_rv_threshold)
                 mm = r["metrics"]
                 rows.append({
                     "Ticker": sym,
@@ -928,10 +1054,8 @@ with tab_scan:
                 errors.append(f"{sym}: {e}")
             prog.progress((i + 1) / len(syms), text=f"Scanned {sym} ({i + 1}/{len(syms)})")
         prog.empty()
-        sig_rank = {"Recommend": 0, "Consider": 1, "Avoid": 2}
-        conv_rank = {"High": 0, "Standard": 1, "—": 2}
-        rows.sort(key=lambda x: (sig_rank[x["Signal"]],
-                                 conv_rank.get(x["Conviction"], 2), -x["IV %ile"]))
+        rows.sort(key=lambda x: (SIG_RANK[x["Signal"]],
+                                 CONV_RANK.get(x["Conviction"], 2), -x["IV %ile"]))
         st.session_state["scan_rows"] = rows
         st.session_state["scan_errors"] = errors
 
