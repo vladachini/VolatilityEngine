@@ -7,12 +7,13 @@ mobile-responsive Streamlit dashboard.
 | File | Purpose |
 |---|---|
 | `engine.py` | `VolatilityEngine` — all strategy math: metrics, signal routing, Kelly sizing, trade structuring, exit protocols, Monte Carlo. |
-| `app.py` | Streamlit UI — signal hero + gate pills, metric cards, IV charts, trade plan with payoff diagram, watchlist scanner, live backtest & Monte Carlo. |
+| `app.py` | Streamlit UI — signal hero + gate pills, metric cards, IV charts, trade plan with payoff diagram, **Upcoming Earnings** calendar, watchlist scanner, live backtest & Monte Carlo. |
 | `backtest.py` | Black-Scholes calendar-spread backtest that **derives** win rate / avg win / avg loss (feeding Kelly + Monte Carlo). Accepts real-event CSVs. |
 | `data_provider_yf.py` | **Yahoo Finance provider** — free, keyless live data incl. real earnings dates. |
+| `data_provider_finnhub.py` | **Finnhub earnings-calendar provider** — free key; market-wide upcoming earnings tagged BMO/AMC, with entry-session timing. |
 | `data_provider.py` | `IBKRDataProvider` — live/delayed market data via Interactive Brokers + `ib_insync`. |
 | `demo.py` | The demo fixture shared by the app and the tests. |
-| `tests/` | Offline sanity tests for the engine, backtest, and Yahoo data-massaging helpers. |
+| `tests/` | Offline sanity tests for the engine, backtest, and the Yahoo + Finnhub helpers. |
 
 ---
 
@@ -50,8 +51,10 @@ same network: `streamlit run app.py --server.address 0.0.0.0`, then browse to
 **Run the tests / standalone backtest:**
 
 ```bash
-python tests/test_engine.py    # no extra deps (pytest also works if installed)
-python backtest.py             # prints derived win rate, Kelly, CAGR, Sharpe...
+python tests/test_engine.py          # engine math (no extra deps; pytest also works)
+python tests/test_yf_helpers.py      # Yahoo data-massaging helpers (offline)
+python tests/test_finnhub_helpers.py # earnings-calendar / entry-timing helpers (offline)
+python backtest.py                   # prints derived win rate, Kelly, CAGR, Sharpe...
 ```
 
 ---
@@ -89,7 +92,10 @@ harvests the collapse ("IV crush") of that front-week premium after the announce
   hard **6% max-debit cap**; the UI converts both into whole contract counts.
 - **Validation (§7)** — Monte Carlo: 500 trades × 1,000 paths fan chart (5/50/95th
   percentiles), **Risk of Ruin** (P of a ≥50% drawdown), and P(finish below start). You
-  can size at the 6% cap or the applied Kelly and compare.
+  can size at the 6% cap or the applied Kelly and compare. Each trade risks a *fixed
+  fraction of current equity*, so capital **compounds geometrically** (exponential): the
+  median is a straight line on the default **log** axis and an upward-curving sweep on the
+  **linear** axis — toggle between them in the tab.
 
 **Backtest (§5/§7)** — `backtest.py` prices an ATM calendar with Black-Scholes before and
 after each earnings event. The edge comes from the two real effects (front-week IV crush
@@ -124,6 +130,28 @@ Honest limitations (also in `data_provider_yf.py`):
 - Yahoo has no IV *history*, so the IV-percentile series uses a trailing 30-day
   realized-vol distribution as a documented proxy. IBKR provides the true series.
 - Yahoo rate-limits aggressive IPs; the app caches fetches for 10 minutes.
+
+#### Upcoming Earnings tab — calendar-driven candidates (free Finnhub key)
+
+yfinance has no market-wide *forward* earnings calendar, so the **Upcoming Earnings**
+tab pulls one from [Finnhub](https://finnhub.io/register) (free key, 60 calls/min). It
+lists every US name reporting in the next *N* days, tagged **BMO/AMC**, runs each through
+the engine on Yahoo data, and ranks the setups — each row showing the **session you'd
+enter** the calendar:
+
+- **AMC** (reports after the close on day *D*): the crush prints overnight, so you enter
+  by the close of *D* → labelled *"Today · AMC"* etc.
+- **BMO** (reports before the open on day *D*): you must be in by the prior close → entry
+  rolls back to the previous business day (weekends skipped).
+
+Set the key in the sidebar (*Earnings calendar key*) or via the `FINNHUB_API_KEY`
+environment variable / Streamlit secret. The calendar is one API call (cached 15 min);
+each ranked name is then a Yahoo fetch, so keep *Max names* modest to stay within limits.
+
+```bash
+export FINNHUB_API_KEY=your_key
+python data_provider_finnhub.py --days 7        # prints the agenda with entry timing
+```
 
 ### Option B: Interactive Brokers (real-time, OPRA-quality)
 
